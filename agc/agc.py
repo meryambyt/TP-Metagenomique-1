@@ -25,14 +25,16 @@ from typing import Iterator, Dict, List
 # https://github.com/briney/nwalign3
 # ftp://ftp.ncbi.nih.gov/blast/matrices/
 import nwalign3 as nw
+import numpy as np
+np.int = int
 
-__author__ = "Your Name"
+__author__ = "Meryam Boulayat"
 __copyright__ = "Universite Paris Diderot"
-__credits__ = ["Your Name"]
+__credits__ = ["Meryam Boulayat"]
 __license__ = "GPL"
 __version__ = "1.0.0"
-__maintainer__ = "Your Name"
-__email__ = "your@email.fr"
+__maintainer__ = "Meryam Boulayat"
+__email__ = "meryam.boulayat@etu.u-paris.fr"
 __status__ = "Developpement"
 
 
@@ -83,7 +85,19 @@ def read_fasta(amplicon_file: Path, minseqlen: int) -> Iterator[str]:
     :param minseqlen: (int) Minimum amplicon sequence length
     :return: A generator object that provides the Fasta sequences (str).
     """
-    pass
+    with gzip.open(amplicon_file, "rt") as f:
+        sequence = ""
+        for line in f:
+            line = line.strip()
+            if line.startswith(">"):
+                if sequence and len(sequence) >= minseqlen:
+                    yield sequence
+                sequence = ""
+            else:
+                sequence += line
+        if sequence and len(sequence) >= minseqlen:
+            yield sequence
+    
 
 
 def dereplication_fulllength(amplicon_file: Path, minseqlen: int, mincount: int) -> Iterator[List]:
@@ -94,7 +108,14 @@ def dereplication_fulllength(amplicon_file: Path, minseqlen: int, mincount: int)
     :param mincount: (int) Minimum amplicon count
     :return: A generator object that provides a (list)[sequences, count] of sequence with a count >= mincount and a length >= minseqlen.
     """
-    pass
+    sequence_list = list(read_fasta(amplicon_file, minseqlen))
+    sequence_counts = Counter(sequence_list)
+    filtered_sequences = {sequence: count for sequence, count in sequence_counts.items() if count >= mincount}
+    
+    sorted_sequences = sorted(filtered_sequences.items(), key=lambda item: item[1], reverse=True)
+    for sequence, count in sorted_sequences:
+        yield sequence, count
+
 
 def get_identity(alignment_list: List[str]) -> float:
     """Compute the identity rate between two sequences
@@ -102,9 +123,13 @@ def get_identity(alignment_list: List[str]) -> float:
     :param alignment_list:  (list) A list of aligned sequences in the format ["SE-QUENCE1", "SE-QUENCE2"]
     :return: (float) The rate of identity between the two sequences.
     """
-    pass
+    count = sum(1 for a, b in zip(alignment_list[0], alignment_list[1]) if a == b)
+    min_size = min(len(alignment_list[0]), len(alignment_list[1]))
+    identity = (count/min_size)*100
+    return identity
 
-def abundance_greedy_clustering(amplicon_file: Path, minseqlen: int, mincount: int, chunk_size: int, kmer_size: int) -> List:
+
+def abundance_greedy_clustering(amplicon_file: Path, minseqlen: int, mincount: int, chunk_size: int = 0, kmer_size: int = 0) -> List:
     """Compute an abundance greedy clustering regarding sequence count and identity.
     Identify OTU sequences.
 
@@ -115,7 +140,25 @@ def abundance_greedy_clustering(amplicon_file: Path, minseqlen: int, mincount: i
     :param kmer_size: (int) A fournir mais non utilise cette annee
     :return: (list) A list of all the [OTU (str), count (int)] .
     """
-    pass
+    list_deraplication = list(dereplication_fulllength(amplicon_file, minseqlen, mincount))
+    otus_list = []
+    
+    for sequence, count in list_deraplication:
+        otu_flag = True
+        
+        for otu_sequence, _ in otus_list:
+            alignment = nw.global_align(sequence, otu_sequence,
+                                        gap_open=-1, gap_extend=-1,
+                                        matrix=str(Path(__file__).parent / "MATCH"))
+            identity = get_identity(alignment)
+            
+            if identity > 97:
+                otu_flag = False
+                break
+        
+        if otu_flag:
+            otus_list.append([sequence, count])
+    return otus_list
 
 
 def write_OTU(OTU_list: List, output_file: Path) -> None:
@@ -124,8 +167,12 @@ def write_OTU(OTU_list: List, output_file: Path) -> None:
     :param OTU_list: (list) A list of OTU sequences
     :param output_file: (Path) Path to the output file
     """
-    pass
-
+    with open(output_file, 'w') as f:
+        for index, (sequence, occurrence) in enumerate(OTU_list, start=1):
+            f.write(f">OTU_{index} occurrence:{occurrence}\n")
+            sequence_reduced = textwrap.fill(sequence, width=80)
+            f.write(sequence_reduced + "\n")
+    
 
 #==============================================================
 # Main program
@@ -137,8 +184,11 @@ def main(): # pragma: no cover
     # Get arguments
     args = get_arguments()
     # Votre programme ici
-
-
+    #print(list(read_fasta(args.amplicon_file, args.minseqlen)))
+    list_otus = abundance_greedy_clustering(args.amplicon_file, args.minseqlen,
+                                            args.mincount)
+    write_OTU(list_otus, args.output_file)
+    
 
 if __name__ == '__main__':
     main()
